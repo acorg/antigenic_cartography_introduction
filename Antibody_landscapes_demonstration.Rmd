@@ -1,0 +1,1156 @@
+---
+title: "Antigenic Cartography Demonstration"
+author: "Antonia Netzl (an604@cam.ac.uk)"
+date: "2024-08-27"
+output: 
+  html_document:
+    code_folding: show
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      warning = FALSE,
+                      message = FALSE,
+                      fig.width=12, fig.height=8,
+                      fig.align = "center")
+```
+
+# Introduction to antigenic cartography
+
+This page contains the code to make
+antigenic maps and antibody landscapes.
+
+The data used here was published in [Roessler et al., Nat Comm
+(2022)](https://doi.org/10.1038/s41467-022-35312-3), publicly available
+in the paper's [GitHub
+repository](https://github.com/acorg/roessler_netzl_et_al2022/tree/v1.0.0)
+and in this GitHub repo. If you use the data, please cite the original
+publication.
+
+If you use materials from this page, please use this repository's DOI as
+reference and cite the Racmacs and/or ablandscapes package.
+
+### Useful resources
+
+Scientific background on antigenic cartography can be found in [Smith et
+al., Science
+(2004)](https://www.science.org/doi/10.1126/science.1097211) and on
+antibody landscapes in [Fonville et al., Science
+(2014)](https://www.science.org/doi/10.1126/science.1256427).
+
+A detailed introduction to the R package for making antigenic maps is
+given on the [Racmacs reference
+page](https://acorg.github.io/Racmacs/index.html).
+
+To run the Racmacs package and construct antigenic maps and antibody
+landscapes, we use R: R Core Team (2022). R: A language and environment
+for statistical computing. R Foundation for Statistical Computing,
+Vienna, Austria. URL <https://www.R-project.org/>.
+
+For examples of map diagnostic steps you can look at the Supplementary
+Material in [Roessler et al., Nat Comm
+(2022)](https://doi.org/10.1038/s41467-022-35312-3) and [Roessler et
+al., Nat Comm (2023)](https://doi.org/10.1038/s41467-023-41049-4).
+
+Antigenic maps were constructed using the Racmacs package, Version
+1.1.35: Wilks S (2022). *Racmacs: R Antigenic Cartography Macros*.
+<https://acorg.github.io/Racmacs>, <https://github.com/acorg/Racmacs>.
+
+Antibody landscapes were constructed using the ablandscapes package,
+Version 1.1.0: Wilks S (2021). *ablandscapes: Making Antibody landscapes
+Using R*. R package version 1.1.0,
+<https://github.com/acorg/ablandscapes>.
+
+We recommend calculating geometric mean titers and fold changes using
+the titertools package to deal with censored data: Wilks SH (2022).
+*titertools: A statistical toolkit for the annalysis of censored
+titration data*. R package version 0.0.0.9001.
+
+## Overview
+
+[Theoretical background]
+
+[Making an antigenic map]
+
+[Making antibody landscapes]
+
+## Theoretical background
+
+If the slideshow does not render for you, try opening it in another browser. It should open in Chrome. Alternatively, you can open the pdf `./Introduction_to_antigenic_cartography.pdf`. This slideshow gives a brief overview of what is demonstrated with real world data in the remaining document.
+
+```{r pdf_slides, echo = FALSE, out.height = "500px", out.width="100%"}
+knitr::include_graphics("./Introduction_to_antigenic_cartography.pdf")
+```
+
+## Making an antigenic map
+
+```{r package_loading, echo = TRUE}
+# these are the packages used in the notebook and should be installed for it to run smoothly
+library(tidyverse)
+library(Racmacs)
+library(ablandscapes)
+library(Racmacs)
+library(dplyr)
+library(r3js)
+library(knitr)
+library(patchwork)
+#install titertools from GitHub: https://github.com/shwilks/titertools.git if you want to estimate <LOD values for GMT calculation
+# library(titertools) 
+```
+
+Antigenic maps should be created from single exposure sera or baseline
+vaccination sera. With just this type of sera (e.g. only 2 dose
+vaccinated), the map will be poorly triangulated, meaning the positional
+resolution of variants will be very low. Sera will not be positioned
+accurately, or at all if titers against the majority of variants are
+below the limit of detection (\<LOD). Homologous sera from the different
+variants are needed to add resolution. The map by Roessler et al. (Nat
+Comm 2022) contains many different human first infection sera.
+
+*Importantly, antigenic maps always reflect the data that was used to
+construct them. So two maps with different types of input sera and
+variants may look very different. Still, they can both be "correct" as
+they correctly represent the input data. To assess the suitability of
+antigenic maps for the given data, map diagnostic steps are important.*
+
+### Read in data
+
+Set the working directory to the root directory of your project for
+convenience.
+
+Antigenic maps deal with titers below the limit of detection (\<LOD) by
+allowing the euclidean map distance to be larger than the titer target
+distance without penalty. Here, the LOD was 16.
+
+The input for making a map is a table of measured titers. The rows
+correspond to the titrated antigens, the columns to the measured sera.
+Here, I will extract a table from an existing map and demonstrate how to
+create a map from this table.
+
+```{r data_read}
+working_dir <- "~/Documents/smith/labbook/antigenic_cartography_intro/"
+
+# set working directory
+setwd(working_dir)
+
+
+# read in data for multiple exposure landscapes
+multi_exposure_data <- read.csv("data/titer_data/titer_data_long.csv")
+
+# Racmacs function to read in antigenic map of .ace format
+og_map <- read.acmap("data/maps/map-OmicronI+II+III-thresholded-single_exposure-P1m1.ace")
+
+# extract Titer Table from map
+titer_data <- titerTable(og_map)
+
+
+# read in colors for map
+sr_group_colors <- read.csv("data/metadata/sr_group_colors.csv", sep = ";")
+mapColors <- read.csv(file = './data/metadata/map-colors.csv', row.names = 'Antigen', header = TRUE)
+mapColors[sr_group_colors$SerumGroup, "Color"] <- sr_group_colors$Color 
+
+
+# show titer table
+kable(titer_data)
+```
+
+Let's have a look at the titer data:
+
+```{r titerplots}
+multi_exposure_data %>%
+  # log2 transform the data and set <LOD values to LOD/2
+  mutate(logtiter = ifelse(titer == "<16", log2(16/20), log2(as.numeric(titer)/10)),
+         sr_group = factor(sr_group, levels = sr_group_colors$SerumGroup)) -> data_long
+
+
+# calculate
+data_long %>%
+  group_by(
+    sr_group,
+    ag_name
+  ) %>%
+  # if you want to use quick LOD/2 method for GMT calculation
+  summarize(logtiter = mean(logtiter, na.rm = TRUE)) %>%
+  #  We recommend using the titertools package for GMT/fold change calculation where <LOD values are estimated in 
+  # a bayesian approach. As it runs a bayesian model in the background, it takes a bit longer to run. The code to run
+  # it is commented out below. It returns the mean, lower and upper estimates of the mean and of the standard deviation
+  # summarize(gmt = titertools::gmt(titer, dilution_stepsize = 0)["mean", "estimate"]) %>%
+  # manually set GMT's that are lower than that to LOD2
+  mutate(logtiter = ifelse(logtiter < log2(0.8), log2(0.8), logtiter),
+         sr_name = "GMT",
+         gmt = logtiter)-> gmt_data
+
+do_titerplot <- function(data_long, target_sr_groups, gmt_data, sr_group_colors, ag_order){
+  
+  data_long %>%
+  filter(sr_group %in% target_sr_groups) %>%
+  mutate(logtiter = ifelse(titer == "<16", log2(16/20), log2(as.numeric(titer)/10))) %>%
+  ggplot(aes(x = ag_name, y = logtiter, color = sr_group, group = sr_name)) + 
+  geom_line(aes(group = sr_name), alpha = 0.3) + 
+  geom_point(alpha = 0.3) + 
+  geom_line(data = gmt_data %>%
+              filter(sr_group %in% target_sr_groups), size = 1.5) + 
+  geom_point(data = gmt_data %>%
+               filter(sr_group %in% target_sr_groups), fill = "white", shape = 21, size = 3) +
+  scale_color_manual(values = setNames(sr_group_colors$Color, sr_group_colors$SerumGroup),
+                     name = "Serum group") +
+  scale_x_discrete(limits = ag_order,
+                   name = "Variant") + 
+  scale_y_continuous(name = "Titer",
+                     labels = function(x) round(2^x*10),
+                     breaks = seq(log2(16/10), 12, 1)) +
+  annotate("rect",
+                xmin = -Inf,
+                xmax = Inf,
+                ymin = -Inf,
+                ymax = log2(16/10),
+            fill = "grey",
+            alpha = 0.6,
+            color = NA) +
+  facet_wrap(~sr_group) + 
+  theme_bw() + 
+  theme(strip.background = element_blank(),
+        axis.text.x = element_text(angle = 45, hjust = 1)) -> p
+  
+  return(p)
+  
+}
+
+# plot the data
+do_titerplot(data_long, target_sr_groups = unique(as.character(srGroups(og_map))),
+              gmt_data = gmt_data, 
+             sr_group_colors = sr_group_colors,
+             ag_order = rownames(titer_data))
+
+
+
+```
+
+Individual titers are shown as faint lines, geometric mean titers (GMT)
+as thick lines. We can see some trends, for example BA.1's escape in
+most serum groups. What we can also see is that P.1.1 (Gamma) titers are
+often higher than the titers against the homologous variant, indicating
+that the specific virus isolate (authentic virus neutralization assays)
+has high reactivity. We can adjust for that by lowering it's reactivity
+in the antigenic map below.
+
+```{r map_from_titertable}
+# set seed for random optimization start
+set.seed(100)
+
+# create the acmap object
+map <- acmap(
+    ag_names = rownames(titer_data),
+    sr_names = colnames(titer_data),
+    titer_table = titer_data)
+
+# The dilution stepsize gives the dilution steps of the neutralization assay on the log2 scale, e.g.: 0 = continuous read out, 1 = two-fold dilutions
+dilutionStepsize(map) <- 0
+
+# optimize the map in 2 dimensions 
+map <- optimizeMap(
+    map,
+    number_of_dimensions = 2,
+    number_of_optimizations = 1000,
+    minimum_column_basis = "none",
+    options = list(ignore_disconnected = TRUE) # Map contains disconnected points (points that are not connected through any path of detectable titers so cannot be coordinated relative to each other)
+  )
+
+# reduce P.1.1 reactivity by 1 dilution step. Alternatively, you can optimize an antigens reactivity using the function below
+ag_reactivities <- rep(0, length(agNames(map)))
+ag_reactivities[agNames(map) == "P.1.1"] <- -1
+map <- optimizeAgReactivity(map, fixed_ag_reactivities = ag_reactivities)
+```
+
+```{r initial_map}
+plot(map)
+```
+
+Above is a basic map. We will add meta-information in the next step to
+make it interpretable:
+
+```{r color_map}
+# Add fill color for map
+agFill(map) <- mapColors[agNames(map),]
+agGroups(map) <- agNames(map)
+
+# Add serum group = serum cohort to map. It is stored here in the sample name, the second field after "_"
+sr_groups <- unlist(lapply(srNames(map), function(x) str_split(x, "_")[[1]][2]))
+srGroups(map) <- factor(sr_groups, levels = sr_group_colors$SerumGroup)
+srOutline(map) <- mapColors[as.character(srGroups(map)),]
+
+# Add general style guidelines to map
+srOutlineWidth(map) <- 1
+srSize(map) <- 9
+agSize(map) <- 18
+srOutline(map) <- adjustcolor(srOutline(map), alpha.f = 0.7)
+
+# make some antigens smaller than others
+sublineages <- c("B.1.1.7+E484K")
+agSize(map)[agNames(map) %in% sublineages] <- 15
+
+# align map to example map. Important: antigen names have to match
+map <- realignMap(map, og_map)
+
+# get map limits for plotting
+lims_no_zoom <- Racmacs:::mapPlotLims(map, sera = TRUE)
+
+xlim_no_zoom <- round(lims_no_zoom$xlim)
+ylim_no_zoom <- round(lims_no_zoom$ylim)
+
+# plot map
+plot(map, plot_labels = "antigens", label.offset = 1, xlim = xlim_no_zoom, ylim = ylim_no_zoom, plot_stress = TRUE)
+```
+
+Characteristics of a single exposure map are that sera (open squares, coloured by homologous variant)
+are located close to their infecting/homologous variant (filled circles) as they have the
+highest titer against this variant. Hence, the antigenic distance to
+this variant is 0. All other variants are located at the Euclidean
+distance that best matches the log2(fold change) of titers from the
+homologous variant to this variant. However, you will see that sera are
+not at exactly the same position as their homologous variant. That is
+because the optimization algorithm finds the optimum for *all* serum and
+variant coordinates to best match the titer fold changes. As there is
+titer variation between individual samples, there will be variation in
+their positions. The mismatch between target titer distance (titer fold
+changes) and euclidean map distance (antigenic distance) is given by the
+map stress in the lower left corner. The lower the stress, the better
+the match between target and map distance.
+
+### Map uncertainty
+
+The plot below shows how much each variant and serum is allowed to move
+without increasing the map stress by more than one unit. It illustrates
+that more \>LOD titers in different types of sera increase the
+positional resolution (e.g. the blue D614G has \>LOD in almost all sera,
+whereas BA.1 has \<LOD in almost all sera).
+
+```{r triangulation}
+
+# triangulation does not work with not-positioned sera - sera cannot be position if too many titers are <LOD
+remove_na_sera <- function(map){
+  
+  na_sera <- srCoords(map)
+  na_sera <- rownames(na_sera)[is.na(na_sera)[,1]]
+  
+  map <- removeSera(map, na_sera)
+  
+  return(map)
+}
+
+remove_na_antigens <- function(map){
+  
+  na_sera <- agCoords(map)
+  na_sera <- rownames(na_sera)[is.na(na_sera)[,1]]
+  
+  map <- removeAntigens(map, na_sera)
+  
+  return(map)
+}
+
+remove_na_coords <- function(map){
+  
+  map <- remove_na_sera(map)
+  map <- remove_na_antigens(map)
+  
+  return(map)
+  
+}
+
+plot(triangulationBlobs(relaxMap(remove_na_coords(map)), stress_lim = 1, grid_spacing = 0.05), fill.alpha = 0.9, plot_labels = FALSE, outline.alpha = 0.9, xlim = xlim_no_zoom, ylim = ylim_no_zoom,
+       grid.col = "#cfcfcf", grid.margin.col="#7d7d7d", cex=0.3, plot_stress = TRUE)
+
+```
+
+To demonstrate the importance of different types of sera on map
+conformation and positional resolution, I will now create maps subset to
+
+1) only 2x Pfizer vaccine sera,
+
+2) previous + alpha sera (different homologous variant but similar antigenic
+profile) 
+
+3) previous + beta sera (sera with more distinct antigenic profile)
+
+4) previosu + BA.1 sera (sera with very distinct antigenic profile)
+
+```{r subset_maps}
+subset_and_optimize_map <- function(full_map, kept_sr_groups){
+  
+  map <- removeSera(full_map, srNames(full_map)[!as.character(srGroups(full_map)) %in% kept_sr_groups])
+  
+  map <- optimizeMap(
+    map,
+    number_of_dimensions = 2,
+    number_of_optimizations = 1000,
+    minimum_column_basis = "none",
+    options = list(ignore_disconnected = TRUE)
+  )
+  
+  map <- realignMap(relaxMap(remove_na_coords(map)), full_map)
+  
+  return(map)
+  
+}
+
+
+vax_map <- subset_and_optimize_map(map, c("BNT/BNT"))
+alpha_map <- subset_and_optimize_map(map, c("BNT/BNT", "alpha conv."))
+beta_map <- subset_and_optimize_map(map, c("BNT/BNT", "alpha conv.", "beta conv."))
+ba1_map <- subset_and_optimize_map(map, c("BNT/BNT", "alpha conv.", "BA.1 conv.", "beta conv."))
+
+ylim_no_zoom[2] <- ylim_no_zoom[2] + 1
+
+layout(matrix(c(1:8), ncol = 4, byrow = FALSE))
+par(oma=c(0, 0, 0, 0), mar=c(0.1, 0, 0.1, 0))
+
+plot(procrustesMap(vax_map, map, sera = FALSE), fill.alpha = 0.9, plot_labels = FALSE, outline.alpha = 0.9, xlim = xlim_no_zoom, ylim = ylim_no_zoom, grid.col = "#cfcfcf", grid.margin.col="#7d7d7d", cex=0.3, plot_stress = TRUE)
+plot(triangulationBlobs(vax_map, stress_lim = 1, grid_spacing = 0.05), fill.alpha = 0.9, plot_labels = FALSE, outline.alpha = 0.9, xlim = xlim_no_zoom, ylim = ylim_no_zoom,
+       grid.col = "#cfcfcf", grid.margin.col="#7d7d7d", cex=0.3, plot_stress = TRUE)
+
+
+plot(procrustesMap(alpha_map, map, sera = FALSE), fill.alpha = 0.9, plot_labels = FALSE, outline.alpha = 0.9, xlim = xlim_no_zoom, ylim = ylim_no_zoom, grid.col = "#cfcfcf", grid.margin.col="#7d7d7d", cex=0.3, plot_stress = TRUE)
+plot(triangulationBlobs(alpha_map, stress_lim = 1, grid_spacing = 0.05), fill.alpha = 0.9, plot_labels = FALSE, outline.alpha = 0.9, xlim = xlim_no_zoom, ylim = ylim_no_zoom,
+       grid.col = "#cfcfcf", grid.margin.col="#7d7d7d", cex=0.3, plot_stress = TRUE)
+
+plot(procrustesMap(beta_map, map, sera = FALSE), fill.alpha = 0.9, plot_labels = FALSE, outline.alpha = 0.9, xlim = xlim_no_zoom, ylim = ylim_no_zoom, grid.col = "#cfcfcf", grid.margin.col="#7d7d7d", cex=0.3, plot_stress = TRUE)
+plot(triangulationBlobs(beta_map, stress_lim = 1, grid_spacing = 0.05), fill.alpha = 0.9, plot_labels = FALSE, outline.alpha = 0.9, xlim = xlim_no_zoom, ylim = ylim_no_zoom,
+       grid.col = "#cfcfcf", grid.margin.col="#7d7d7d", cex=0.3, plot_stress = TRUE)
+
+
+plot(procrustesMap(ba1_map, map, sera = FALSE), fill.alpha = 0.9, plot_labels = FALSE, outline.alpha = 0.9, xlim = xlim_no_zoom, ylim = ylim_no_zoom, grid.col = "#cfcfcf", grid.margin.col="#7d7d7d", cex=0.3, plot_stress = TRUE)
+plot(triangulationBlobs(ba1_map, stress_lim = 1, grid_spacing = 0.05), fill.alpha = 0.9, plot_labels = FALSE, outline.alpha = 0.9, xlim = xlim_no_zoom, ylim = ylim_no_zoom,
+       grid.col = "#cfcfcf", grid.margin.col="#7d7d7d", cex=0.3, plot_stress = TRUE)
+```
+
+From left to right:
+
+1) only 2x Pfizer vaccine sera,
+
+2) previous + alpha sera (different homologous variant but similar antigenic
+profile) 
+
+3) previous + beta sera (sera with more distinct antigenic profile)
+
+4) previosu + BA.1 sera (sera with very distinct antigenic profile)
+
+The top row shows the antigenic maps with arrows pointing to the
+variants' positions in the full map, the bottom row shows the constant
+force loci (triangulation blobs).
+
+The third map gives a very similar confirmation as the "full map" but
+the positional resolution of the Omicron variants is very low.
+
+### Interactive viewer
+
+Racmacs provides an interactive viewer:
+
+```{r interactive_viewer}
+Racmacs::view(map)
+```
+
+## Making antibody landscapes
+
+Multiple exposures increase cross-neutralization and hence fold changes
+of titers between variants are less pronounced. Creating a map from such
+sera results in a map where variants are closer together than in single
+exposure sera maps and an underestimation of antigenic relationships.
+Multiple exposures do not change the antigenic relationships of virus
+strains, but change how cross-reactive sera are. We can see that by
+comparing fold changes from the homologous titer variant after 2 and 3
+Pfizer vaccines:
+
+```{r multi_exposure_titers}
+# get GMT fold change from D614G
+gmt_data %>%
+  filter(sr_group %in% c("BNT/BNT", "BNT/BNT/BNT")) %>%
+  group_by(sr_group) %>%
+  mutate(log_fc = logtiter[ag_name == "D614G"] - logtiter,
+         fc = ifelse(log_fc > 0, paste0("-", round(2^abs(log_fc), 1)), round(2^abs(log_fc), 1))) -> fc_data
+
+do_titerplot(data_long,
+             target_sr_groups = c("BNT/BNT", "BNT/BNT/BNT"),
+             gmt_data,
+             sr_group_colors,
+             ag_order = rownames(titer_data)[!grepl("P.1.1", rownames(titer_data))]) + 
+  geom_text(data = fc_data, aes(label = fc), y = 10.5) + 
+  geom_text(data = fc_data, aes(label = abs(round(log_fc, 1))), y = 10)
+
+```
+
+The top row of numbers lists the GMT fold change from D614G, the row
+below the log2(fold change) and thereby the antigenic distance. The
+antigenic distance difference is the most pronounced for the most
+distant Omicron variants.
+
+To illustrate this effect on an antigenic map, we will create a map from
+3x Pfizer vaccine sera and compare it to the 2x Pfizer vaccine sera:
+
+```{r multi_exposure_map}
+# remove P.1.1 because of the high reactivity - for simplicity
+multi_exposure_data %>%
+  filter(ag_name != "P.1.1") -> multi_exposure_data 
+
+# make table for 3x Pfizer sera
+multi_exposure_data %>%
+  filter(sr_group == "BNT/BNT/BNT") %>%
+  select(!sr_group) %>%
+  pivot_wider(names_from = "sr_name", values_from = "titer") %>%
+  column_to_rownames("ag_name") -> table_3x
+
+
+# make 3x map
+# create the acmap object
+map_3x <- acmap(
+    ag_names = rownames(table_3x),
+    sr_names = colnames(table_3x),
+    titer_table = table_3x)
+
+# The dilution stepsize gives the dilution steps of the neutralization assay on the log2 scale, e.g.: 0 = continuous read out, 1 = two-fold dilutions
+dilutionStepsize(map_3x) <- 0
+
+# optimize the map in 2 dimensions 
+map_3x <- optimizeMap(
+    map_3x,
+    number_of_dimensions = 2,
+    number_of_optimizations = 1000,
+    minimum_column_basis = "none",
+    options = list(ignore_disconnected = TRUE) # Map contains disconnected points (points that are not connected through any path of detectable titers so cannot be coordinated relative to each other)
+  )
+
+map_3x <- realignMap(map_3x, map)
+srOutline(map_3x) <- "grey20"
+agFill(map_3x) <- mapColors[agNames(map_3x), "Color"]
+
+agSize(map_3x) <- 18
+srSize(map_3x) <- 9
+# Do plotting
+layout(matrix(c(1:2), ncol = 2, byrow = FALSE))
+par(oma=c(0, 0, 0, 0), mar=c(0.1, 0, 0.1, 0))
+
+plot(map_3x, fill.alpha = 0.9, plot_labels = FALSE, outline.alpha = 0.9, xlim = xlim_no_zoom, ylim = ylim_no_zoom, grid.col = "#cfcfcf", grid.margin.col="#7d7d7d", cex=0.3, plot_stress = TRUE)
+
+plot(procrustesMap(map_3x, vax_map, sera = FALSE), fill.alpha = 0.9, plot_labels = FALSE, outline.alpha = 0.9, xlim = xlim_no_zoom, ylim = ylim_no_zoom, grid.col = "#cfcfcf", grid.margin.col="#7d7d7d", cex=0.3, plot_stress = TRUE)
+```
+
+On the left, we see the map from 3x Pfizer vaccine sera. On the right,
+arrows point to the variants' positions in the 2x Pfizer map. The arrows
+point outside, indicating that the variants are closer to each other in
+the 3x Pfizer map, and therefore look more antigenically similar, than
+in the 2x Pfizer map. However, the virus isolates used in the assay are
+the same. Again, it is not the antigenic relationships and properties of
+the viruses that change with more exposures, but the antibody
+composition in the multi-exposure sera.
+
+## Antibody landscapes
+
+Antibody landscapes better represent multiple exposure sera.
+Neutralization titers are mapped as a continuous surface above an
+antigenic map: Titers against the respective variant are mapped above
+the variant in a third dimension, the height representing the titer
+magnitude, and connected through a surface, the slope of which indicates
+the cross-reactivity. The smaller the slope, the more cross-reactive the
+sample.
+
+In the single cone landscape approached used here, cone coordinates (x,
+y) and cone heights (z) are fitted to titers per subject. The slope of
+this cone is optimised over all subjects per serum group, assuming the
+same decrease of neutralization across antigenic space. The cone slopes
+indicate the breadth of neutralization titers. As immune history becomes
+more complex, for example for influenza, a single cone approach does not
+provide a good approach and a loess fit should be used.
+
+The description above focusses on antibody neutralization, not binding.
+The landscape fitting approach remains the same, however.
+
+```{r landscape_functions}
+
+# orientation for landscapes
+angle <- list(
+  rotation = c(-1.4427, 0.0100, -0.0263), 
+  translation = c(0, 0,0), 
+  zoom = 1.5
+)
+
+# a function to get titer tables from long format to matrix form as input for the antibody landscape fit 
+get_titertable <- function(data, group) {
+  
+  data %>% 
+    select(
+      ag_name,
+      sr_name,
+      titer
+    ) %>%
+    mutate(
+      titer = replace(titer, is.na(titer), "*")
+    ) %>%
+    pivot_wider(
+      id_cols = sr_name,
+      names_from = ag_name,
+      values_from = titer
+    ) %>% 
+    as.matrix() -> titermatrix
+  
+  attr(titermatrix, "sr_group") <- group$sr_group
+  rownames(titermatrix) <- titermatrix[,"sr_name"]
+  titermatrix <- titermatrix[,-1]
+  
+   return(titermatrix)
+  
+}
+
+# plot the base map as r3js object
+base_plot_data3js <- function(map, lndscp_fits, highlighted_ags, lims, ag_plot_names,
+                              add_border = TRUE, add_axis = TRUE){
+  
+  # get coordinates for variants that should be plotted (highlighted ags)
+    x_coords <- c(agCoords(map)[agNames(map) %in% highlighted_ags, 1])
+    y_coords <- c(agCoords(map)[agNames(map) %in% highlighted_ags, 2])
+    z_coords <- rep(0.02, length(highlighted_ags))
+    ag_point_size <- c(rep(14, length(highlighted_ags))) / 5
+    ag_col <- c(agOutline(map)[agNames(map) %in% highlighted_ags])
+    ag_fill <- c(agFill(map)[agNames(map) %in% highlighted_ags])
+    labels <- c(ag_plot_names[agNames(map) %in% highlighted_ags])
+    border_col <- "grey50"
+  
+  z_lims <- c(0,10)
+  axis_at <- seq(z_lims[1], z_lims[2],2)
+  
+  # Setup plot
+  data3js <- ablandscapes:::lndscp3d_setup(
+    xlim = lims$xlim,
+    ylim = lims$ylim,
+    zlim = z_lims,
+    aspect.z = 0.5,
+    options = list(
+      lwd.grid =  0.05,
+      sidegrid.lwd = 1,
+      sidegrid.col = border_col,
+      sidegrid.at = list("z" = axis_at),
+      zaxt = "log"
+    ),
+    show.axis = FALSE
+  )
+  
+  # add z axis
+  if(add_axis){
+
+    axis_labels <- 2^axis_at*10
+    
+    data3js <- r3js::axis3js(
+      data3js,
+      side = "z",
+      at = axis_at,
+      labels = axis_labels,
+      cornerside = "f",
+      size = 20,
+      alignment = "right"
+    )
+  }
+
+  # Add basemap
+  data3js <- lndscp3d_map(
+    data3js = data3js,
+    fit = lndscp_fits[[1]],
+    xlim = lims$xlim,
+    ylim = lims$ylim,
+    zlim = c(0, 10),
+    show.map.sera = FALSE,
+    options = list(
+      opacity.basemap = 0.3
+    )
+  )
+  
+  # add variants
+  data3js <- r3js::points3js(
+    data3js,
+    x          = x_coords,
+    y          = y_coords,
+    z          = z_coords,
+    size       = ag_point_size,
+    col        = ag_col,
+    fill       = ag_fill,
+    lwd        = 0.5,
+    opacity    = 1,
+    highlight  = list(col = "red"),
+    label      = labels,
+    toggle     = "Basepoints",
+    depthWrite = FALSE,
+    shape      = "circle filled"
+  )
+  
+  # thicker border of the base map
+  if(add_border){
+    data3js <- lines3js(data3js, x = c(lims$xlim[1],lims$xlim[1]), y = c(lims$ylim[1], lims$ylim[2]), z = c(0, 0),
+                        lwd = 1.2, col = border_col)
+    data3js <- lines3js(data3js, x = c(lims$xlim[2],lims$xlim[2]), y = c(lims$ylim[1], lims$ylim[2]), z = c(0, 0),
+                        lwd = 1.2, col = border_col)
+    
+    # y border
+    data3js <- lines3js(data3js, x = c(lims$xlim[1],lims$xlim[2]), y = c(lims$ylim[1], lims$ylim[1]), z = c(0, 0),
+                        lwd = 1.2, col = border_col)
+    data3js <- lines3js(data3js, x = c(lims$xlim[1],lims$xlim[2]), y = c(lims$ylim[2], lims$ylim[2]), z = c(0, 0),
+                        lwd = 1.2, col = border_col)
+
+    data3js <- r3js::box3js(
+      data3js,
+      col   = border_col
+    )
+    
+  }
+  
+
+  return(data3js)
+}
+
+# plot landscapes from a list that contains the fits
+plot_landscapes_from_list <- function(data3js, # base map as r3js object
+                                      titertables_groups, # grouped titer table object for serum groups
+                                      lndscp_fits, # landscape fits as list
+                                      map, # map for x,y coordinates of GMT points
+                                      highlighted_ags, # which map antigens should be highlighted (GMT coordinates)
+                                      lndscp_colors, # colors for the landscapes
+                                      gmt_data = NULL, 
+                                      show_gmts = TRUE, 
+                                      show.individual.surfaces = FALSE, 
+                                      options.individual.surfaces = list(opacity.surface.grid = 0.4,
+                                                                         opacity.surface = 0.2, 
+                                                                         col.surface = "grey70", 
+                                                                         col.surface.grid = "grey70"), 
+                                      show_landscapes = TRUE){
+  
+  
+  # get x and y coords for gmt points
+    x_coords <- c(agCoords(map)[agNames(map) %in% highlighted_ags, 1])
+    y_coords <- c(agCoords(map)[agNames(map) %in% highlighted_ags, 2])
+    coords <- cbind(x_coords, y_coords)
+    coords <- coords[!is.na(x_coords),]
+    
+    
+    # for each landscape fit object (serum group), do the plotting
+  for (i in seq_along(lndscp_fits)) {
+    
+    # select sr group
+    srg <- titertables_groups$sr_group[i]
+    lndscp_fit <- lndscp_fits[[i]]
+    
+    for (j in seq_len(nrow(coords))) {
+      
+      if(show_gmts){
+        
+        if(is.null(gmt_data)){
+          warning("Error: You want to plot GMT but did not provide GMT data")
+          return()
+        }
+        
+        # select the gmt data for the serum group
+        gmts <- gmt_data %>%
+          filter(sr_group == srg)
+    
+        gmts <- gmts[match(rownames(coords), gmts$ag_name),]
+
+        # plot GMTs
+        data3js <- r3js::lines3js(
+          data3js,
+          x = rep(coords[j, 1], 2),
+          y = rep(coords[j, 2], 2),
+          z = c(0, gmts$gmt[j]),
+          col = "grey50",
+          toggle = sprintf("GMT, %s", srg),
+          geometry = TRUE,
+          opacity = 0.7,
+          lwd = 0.2 
+        )
+        
+        data3js <- r3js::points3js(
+          data3js,
+          x         = coords[j, 1],
+          y         = coords[j, 2],
+          z         = gmts$gmt[j],
+          size      = 0.9,
+          col  = lndscp_colors[srg, "Color"],
+          toggle = sprintf("GMT, %s", srg),
+          opacity   = 1 
+          
+        )
+      }
+      
+    }
+
+
+    if(show_landscapes){
+      
+      # Add GMT landscapes
+    data3js <- lndscp3d_surface(
+      data3js = data3js,
+      object = lndscp_fit,
+      crop2chull = FALSE,
+      toggle = sprintf("GMT landscape, %s", srg),
+      grid_spacing = 0.5,
+      padding = 0.2,
+      options = list(
+        col.surface = lndscp_colors[srg, "Color"],
+        opacity.surface = 1
+      )
+    )
+    
+    fit <- lndscp_fit
+    
+    # show individual landscapes
+    if (show.individual.surfaces) {
+      for (i in seq_len(nrow(fit$titers))) {
+        individual_fit <- fit
+        individual_fit$titers <- fit$titers[i, ]
+        individual_fit$logtiters <- fit$logtiters[i, ]
+        individual_fit$logtiters.upper <- individual_fit$logtiters.upper[i, 
+        ]
+        individual_fit$logtiters.lower <- individual_fit$logtiters.lower[i, 
+        ]
+        individual_fit$lessthans <- individual_fit$lessthans[i, 
+        ]
+        individual_fit$morethans <- individual_fit$morethans[i, 
+        ]
+        individual_fit$fitted.values <- NULL
+        individual_fit$residuals <- NULL
+        individual_fit$residuals.lessthan <- NULL
+        individual_fit$residuals.morethan <- NULL
+        if (!is.null(individual_fit$cone)) {
+          individual_fit$cone$cone_coords <- individual_fit$cone$cone_coords[i, 
+                                                                             , drop = F]
+          individual_fit$cone$cone_heights <- individual_fit$cone$cone_heights[i]
+        }
+        data3js <- lndscp3d_surface(data3js = data3js, object = individual_fit, 
+                                    crop2chull = FALSE, grid_spacing = 0.5, 
+                                    padding = 0.1,
+                                    options = options.individual.surfaces,
+                                    toggle = "Individual landscapes")
+      }
+    }
+      
+    }
+    
+    
+    
+    }
+ 
+  
+  return(data3js)
+}
+
+# set orientation
+set_r3js_orentation <- function(data3js, angle){
+  r3js(
+  data3js,
+  rotation = angle$rotation,
+  zoom = angle$zoom
+)
+}
+
+```
+
+### Doing the landscape fits
+
+```{r landscape_fits}
+# group multi exposure data by serum group
+multi_exposure_data %>%
+  group_by(
+    sr_group
+  ) -> titerdata
+
+titerdata %>%
+  group_map(
+    get_titertable
+  ) -> titertables
+
+
+# do the fit per serum group on base map
+lndscp_fits <- lapply(titertables, function(titer_table){
+  ablandscape.fit(
+           titers = titer_table, #errors can occur if the titertable for one serum group contains only one sample (then this sample is passed as a vector rather than a matrix) and if all titers in a sample are <LOD/NA. The titers are fitted, not the logtiters. <LOD values are estimated, but if all values are <LOD there is too little data to estimate from
+           bandwidth = 1,
+           degree = 1,
+           method = "cone",
+           error.sd = 1,
+           acmap = map,
+           control = list(
+             optimise.cone.slope = TRUE
+           )
+         )
+  
+})
+
+
+# calculate GMTs per serum group
+titertables_groups <- group_data(titerdata)
+```
+
+### Base map for antibody landscapes
+
+```{r plot_scapes_code}
+
+# plot the base map
+data3js <- base_plot_data3js(map, lndscp_fits, highlighted_ags = agNames(map), ag_plot_names = agNames(map), lims = lims_no_zoom)
+
+set_r3js_orentation(data3js, angle)
+
+```
+
+### Add 2 dose Pfizer GMTs
+
+```{r base_2x_gmt}
+# plot 2x vax gmts
+pfizer2_ind <- match("BNT/BNT", titertables_groups$sr_group)
+
+# do lndscp colors in correct format
+lndscp_colors <- sr_group_colors %>%
+  column_to_rownames("SerumGroup")
+
+gmt_2x <- plot_landscapes_from_list(data3js = data3js, titertables_groups = titertables_groups[pfizer2_ind,], lndscp_fits =  lndscp_fits[pfizer2_ind], map = map, gmt_data =  gmt_data, highlighted_ags = agNames(map), lndscp_colors = lndscp_colors, show_gmts = TRUE, show.individual.surfaces = FALSE, show_landscapes = FALSE)
+
+set_r3js_orentation(gmt_2x, angle)
+
+```
+
+### Add GMT surface
+
+```{r 2x_gmt_scape}
+
+gmt_scape_2x <- plot_landscapes_from_list(data3js = data3js, titertables_groups = titertables_groups[pfizer2_ind,], lndscp_fits =  lndscp_fits[pfizer2_ind], map = map, gmt_data =  gmt_data, highlighted_ags = agNames(map), lndscp_colors = lndscp_colors, show_gmts = TRUE, show.individual.surfaces = FALSE, show_landscapes = TRUE)
+
+set_r3js_orentation(gmt_scape_2x, angle)
+
+```
+
+### Add individual subject surfaces
+
+```{r 2x_gmt_scape_idvl}
+
+gmt_scape_2x <- plot_landscapes_from_list(data3js = data3js, titertables_groups = titertables_groups[pfizer2_ind,], lndscp_fits =  lndscp_fits[pfizer2_ind], map = map, gmt_data =  gmt_data, highlighted_ags = agNames(map), lndscp_colors = lndscp_colors, show_gmts = TRUE, show.individual.surfaces = TRUE, show_landscapes = TRUE)
+
+set_r3js_orentation(gmt_scape_2x, angle)
+
+```
+
+## Plot 2 doses vs. 3 doses landscapes
+
+```{r plot_lndscp}
+target_groups <- grep("BNT/BNT|BNT/BNT/BNT", titertables_groups$sr_group)[c(1,3)]
+
+lndscps_plot <- plot_landscapes_from_list(data3js = data3js, titertables_groups = titertables_groups[target_groups,], lndscp_fits =  lndscp_fits[target_groups], map = map, gmt_data =  gmt_data, highlighted_ags = agNames(map), lndscp_colors = lndscp_colors, show_gmts = TRUE, show_landscapes = TRUE)
+
+set_r3js_orentation(lndscps_plot, angle)
+```
+
+The antibody landscapes after different doses illustrate the increasing
+breadth after repeated exposure. The cone slope of each landscape is a
+measure of its breadth and can be accessed via the `cone` field of each
+antibody landscape fit, which also contains the fitted cone coordinates
+and cone heights per subject. The underlying geometry of the antigenic
+map - one antigenic distance unit corresponds to one two-fold change of
+neutralization titers - means that single exposure sera, from which the
+map was built, have a landscape slope around 1 on the log2 scale: With
+each antigenic distance unit away from the cone apex, the titers
+decrease by one two-fold. The slopes of multi-exposure sera are much
+lower than the slopes of single exposure sera:
+
+```{r lndscp_cones, echo = TRUE}
+slopes <- lapply(lndscp_fits, function(fit){
+  fit$cone$cone_slope
+})
+
+slopes_df <- data.frame("Serum group" = factor(titertables_groups$sr_group, levels = levels(srGroups(map))),
+                        "Landscape slope" = unlist(slopes)) %>%
+  arrange(Serum.group)
+
+kable(slopes_df)
+```
+
+## Plot all GMT surfaces
+
+```{r plot_all_gmt_lndscp}
+
+lndscps_plot <- plot_landscapes_from_list(data3js = data3js, titertables_groups = titertables_groups, lndscp_fits =  lndscp_fits, map = map, gmt_data =  gmt_data, highlighted_ags = agNames(map), lndscp_colors = lndscp_colors, show_gmts = TRUE, show_landscapes = TRUE)
+
+set_r3js_orentation(lndscps_plot, angle)
+```
+
+## Quality controls for antibody landscapes
+
+An easy first visual inspection is also the direct comparison between
+landscape fitted GMT and measured GMT:
+
+```{r lndscp_eval, out.width="120%"}
+
+# bind landscape fit and calculated gmt
+combine_landscape_and_calculated_gmt <- function(lndscp_fits, gmt_data, sr_group_fields = 2){
+  
+  lndscp_gmts <- lapply(lndscp_fits, function(x){
+    
+    gmts <- data.frame(logtiter = x$fitted.value,
+                       ag_name = names(x$fitted.value),
+                       sr_group = str_split(rownames(x$logtiters)[1], "_")[[1]][sr_group_fields])
+    return(gmts)
+  })
+  
+  lndscp_gmts <- do.call(rbind, lndscp_gmts)
+  
+  
+  ## compare lndscp gmts and claculated gmts
+  comb_gmt <- rbind(lndscp_gmts %>%
+                      mutate(Data = "Fitted Landscape GMT"),
+                    gmt_data %>%
+                      select(sr_group, ag_name, logtiter) %>%
+                      unique() %>%
+                      mutate(Data = "Calculated GMT"))
+  
+  
+  return(comb_gmt)
+}
+
+
+comb_data <- combine_landscape_and_calculated_gmt(lndscp_fits, gmt_data %>%
+                                                    mutate(logtiter = gmt) %>%
+                                                    select(!gmt),
+                                                  sr_group_fields = 2)
+
+
+# plot comparison
+comb_data %>%
+  filter(ag_name != "P.1.1") %>%
+  mutate(sr_group = factor(sr_group, levels = rownames(lndscp_colors))) %>%
+    ggplot(aes(x = ag_name, y = logtiter, color = Data, fill = Data)) + 
+    geom_line(aes(group = Data), position = position_dodge(width = 0.05)) + 
+    geom_point(shape = 21, color = "grey20", position = position_dodge(width = 0.05)) + 
+    scale_x_discrete(name = "Variant",
+                     limits = agNames(map)[!grepl("P.1.1", agNames(map))]) + 
+    scale_y_continuous(breaks = seq(log2(16/10), 12, by = 2),
+                     labels = function(x) ifelse(x == log2(16/10), paste0("<", 16), round(2^x*10)),
+                     limits = c(-2, 12),
+                       name = "GMT") + 
+    annotate(
+      "rect",
+      xmin= -Inf,
+      xmax = Inf,
+      ymin = -Inf, 
+      ymax = log2(16/10),
+      fill = "grey50",
+      color = NA,
+      alpha = 0.2
+    ) +
+    facet_wrap(~sr_group,
+               labeller = label_wrap_gen(multi_line = TRUE)) + 
+    theme_bw() +
+    theme(strip.background = element_blank(),
+          axis.text.x = element_text(angle = 45, hjust = 1, size = 10),
+          axis.text.y = element_text(size = 8)) -> p
+
+p
+```
+
+Each ablandscape fit object contains a `residuals` field to check for
+error between measured logtiter and fitted landscape GMT for individual
+samples. The residuals are given on the log2 scale, so a residual of 1
+corresponds to 1 2-fold change difference between measured titer and
+fitted landscape GMT.
+
+```{r lndscp_residuals}
+# get residuals into long format
+residuals_to_long <- function(residuals, values_name = "residuals"){
+  
+  ag_names <- colnames(residuals)
+  as.data.frame(residuals) %>%
+    rownames_to_column(var = "sr_name") %>%
+    pivot_longer(cols = all_of(ag_names), names_to = "ag_name", values_to = values_name) -> residuals_long
+  
+  
+  return(residuals_long)
+}
+  
+# extract residuals from landscape fit function
+combine_residuals <- function(fit, sr_group_fields = 2){
+  
+  
+  residuals <- fit$residuals
+  less_thans <- fit$residuals.lessthan
+  more_thans <- fit$residuals.morethan
+  
+  long_res <- residuals_to_long(residuals, "residuals")
+  long_less <- residuals_to_long(less_thans, "less_than")
+  long_more <- residuals_to_long(more_thans, "more_than")
+  
+  serum_group <- paste0(str_split(long_res$sr_name[1], "_")[[1]][sr_group_fields], collapse = "_")
+  
+  comb <- long_res %>%
+    left_join(long_less, by = c("ag_name", "sr_name")) %>%
+    left_join(long_more, by = c("ag_name", "sr_name")) %>%
+    mutate(measured = ifelse(is.na(residuals), ifelse(is.na(less_than), "more_than", "less_than"), "detectable"),
+           residuals = ifelse(is.na(residuals), ifelse(is.na(less_than), more_than, less_than), residuals)) %>%
+    select(!less_than:more_than) %>%
+    mutate(sr_group = serum_group)
+  
+  return(comb)
+}
+
+# get root mean square error per variant
+rmse_per_variant <- function(lndscp_fits, sr_group_fields = 2){
+  all_residuals <- lapply(lndscp_fits, function(x) combine_residuals(x, sr_group_fields))
+  
+  all_residuals <- do.call(rbind, all_residuals)
+  
+  all_residuals %>%
+    filter(!is.na(residuals)) %>%
+    group_by(sr_group) %>%
+    summarize(ag_name = "Total", 
+              rmse = sqrt(sum(residuals^2, na.rm = TRUE)/(length(residuals))), # Residual standard error
+              residual_type = "All variants") -> total_ag
+  
+  all_residuals %>%
+    filter(!is.na(residuals)) %>%
+    group_by(ag_name, sr_group) %>%
+    mutate(rmse = sqrt(sum(residuals^2, na.rm = TRUE)/(length(residuals))),
+           residual_type = "By variant") %>%
+    plyr::rbind.fill(., total_ag) -> ssr
+  
+  return(ssr)
+}
+
+residuals <- rmse_per_variant(lndscp_fits, sr_group_fields = 2) %>%
+  mutate(sr_group = factor(sr_group, levels = levels(srGroups(map))))
+
+# plot residuals
+residuals %>%
+  ggplot(aes(x = ag_name, y = rmse, fill = ag_name)) + 
+  geom_point(color = "grey20", shape = 21) + 
+  scale_x_discrete(limits = agNames(map)[!grepl("P.1.1", agNames(map))],
+                   name = "Variant") +
+  ylab("RMSE (log2(FC))") + 
+  ylim(c(0,max(ceiling(residuals$rmse)))) +
+  facet_wrap(~sr_group) + 
+  scale_fill_manual(values = setNames(mapColors$Color, rownames(mapColors)),
+                    name = "Variant") +
+  theme_bw() +
+  theme(strip.background = element_blank(),
+        legend.position = "none",
+        axis.text.x = element_text(angle = 45, hjust = 1)) -> rmse_plot_variant
+
+# plot residuals
+residuals %>%
+  filter(ag_name == "Total") %>%
+  ggplot(aes(x = sr_group, y = rmse, fill = sr_group)) + 
+  geom_point(color = "grey20", shape = 21) + 
+  ylab("RMSE (log2(FC))") + 
+  ylim(c(0,max(ceiling(residuals$rmse)))) +
+  scale_fill_manual(values = setNames(mapColors$Color, rownames(mapColors)),
+                    name = "Serum group") +
+  theme_bw() +
+  xlab("Serum group") +
+  theme(strip.background = element_blank(),
+        legend.position = "none",
+        axis.text.x = element_text(angle = 45, hjust = 1)) -> rmse_sr_groups
+
+
+rmse_sr_groups + rmse_plot_variant
+```
