@@ -9,5 +9,5 @@ repository](https://github.com/acorg/roessler_netzl_et_al2022/tree/v1.0.0)
 and in this GitHub repo. If you use the data, please cite the original
 publication.
 
-If you use materials from this page, please use this repository's DOI as
-reference and cite the Racmacs and/or ablandscapes package.
+If you use materials from this page, please use this repository [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.13471558.svg)](https://doi.org/10.5281/zenodo.13471558)
+and cite the Racmacs and/or ablandscapes package.
