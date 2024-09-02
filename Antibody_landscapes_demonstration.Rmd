@@ -156,7 +156,8 @@ setwd(working_dir)
 
 # read in data for multiple exposure landscapes
 multi_exposure_data_b <- read.csv("data/titer_data/titer_data_long.csv") %>%
-  mutate(sr_group = gsub("\\/alpha\\+E484K", "", sr_group)) 
+  mutate(sr_group = gsub("\\/alpha\\+E484K", "", sr_group),
+         sr_name = gsub("\\/alpha\\+E484K", "", sr_name)) 
 
 # go to Additional section to find out more
 multi_exposure_data <- multi_exposure_data_b %>%
@@ -164,6 +165,7 @@ multi_exposure_data <- multi_exposure_data_b %>%
 
 # Racmacs function to read in antigenic map of .ace format
 og_map <- read.acmap("data/maps/map-OmicronI+II+III-thresholded-single_exposure-P1m1.ace")
+srGroups(og_map) <-  gsub("\\/alpha\\+E484K", "", srGroups(og_map)) 
 
 # extract Titer Table from map
 titer_data_og <- titerTable(removeAntigens(og_map, "P.1.1"))
@@ -191,6 +193,7 @@ mapColors[sr_group_colors$SerumGroup, "Color"] <- sr_group_colors$Color
 # show titer table
 kable(titer_data, "html", align = "r") %>%
   kable_styling("striped", full_width = F)
+
 ```
 
 Let's have a look at the titer data:
@@ -430,7 +433,7 @@ conformation and positional resolution, I will now create maps subset to
 
 3)  previous + beta sera (sera with more distinct antigenic profile)
 
-4)  previosu + BA.1 sera (sera with very distinct antigenic profile)
+4)  previous + BA.1 sera (sera with very distinct antigenic profile)
 
 ```{r subset_maps}
 subset_and_optimize_map <- function(full_map, kept_sr_groups){
@@ -495,7 +498,7 @@ From left to right:
 
 3)  previous + beta sera (sera with more distinct antigenic profile)
 
-4)  previosu + BA.1 sera (sera with very distinct antigenic profile)
+4)  previous + BA.1 sera (sera with very distinct antigenic profile)
 
 The top row shows the antigenic maps with arrows pointing to the
 variants' positions in the full map, the bottom row shows the constant
